@@ -1,4 +1,4 @@
-# Air Quality Analysis — LA County 2025
+# Air Quality Analysis
 
 ## Dataset
 
@@ -48,9 +48,11 @@ data/raw/daily_summary/
 ---
 
 ### 2. Clean and aggregate by county
-In raw daily data, each county contains multiple entries from multiple sites, and each site may have multiple observations. To aggregate them into 1 entry per day, we aggregate across sites and POC by averaging.
+In raw daily data, each county contains multiple entries from multiple sites, and each site may have multiple observations (i.e., multiple rows for one day). To aggregate them into 1 entry per day, we aggregate across sites and POC by averaging.
 
-Filters to a given county given state code and county code (e.g. LA County: 6 - 37), cleans records (event type, sample duration, pollutant standard, POC dedup), and aggregates to **county-level daily** series.
+Given state code and county code (e.g. LA County: 6 - 37), the cleaning&aggregation pipeline involves:
+ - cleaning records (event type, sample duration, pollutant standard, POC dedup)
+ - aggregating to **county-level daily** series.
 
 Commands for data cleaning and aggregation for LA County:
 ```bash
