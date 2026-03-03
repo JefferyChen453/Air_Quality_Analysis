@@ -1,5 +1,5 @@
 """
-Visualization for Los Angeles County (06-037), Year 2025.
+Visualization for EPA air quality data (cleaned-and-aggregated by county).
 
 Generates figures:
   - AQI overview (time-series, distribution, category breakdown, defining pollutant)
@@ -10,11 +10,16 @@ Generates figures:
   - Pollutant–weather scatter matrix
   - AQI vs key pollutants
 
+Reads from: data/processed/{state}_{county}_{name}/
+Writes to:  figures/{state}_{county}_{name}/
+
 Usage:
-    uv run data_process/visualize.py
+    uv run data_process/visualize.py --state 6 --county 37
 """
 
+import argparse
 import os
+import sys
 import warnings
 
 import matplotlib.pyplot as plt
@@ -26,10 +31,31 @@ from scipy import stats
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# Config
-DATA_DIR = os.path.join("data", "processed", "06_037_Los_Angeles")
-FIG_DIR = os.path.join("figures")
-os.makedirs(FIG_DIR, exist_ok=True)
+# Set in main() from --state / --county
+DATA_DIR = None
+FIG_DIR = None
+PROCESSED_BASE = os.path.join("data", "processed")
+FIGURES_BASE = os.path.join("figures")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Visualize cleaned-and-aggregated EPA air quality data for a county."
+    )
+    parser.add_argument("--state", type=int, required=True, help="State FIPS code (e.g. 6 for California)")
+    parser.add_argument("--county", type=int, required=True, help="County FIPS code (e.g. 37 for Los Angeles)")
+    return parser.parse_args()
+
+
+def resolve_processed_dir(state_code: int, county_code: int) -> str:
+    """Find processed directory named {state:02d}_{county:03d}_* under data/processed."""
+    prefix = f"{state_code:02d}_{county_code:03d}_"
+    if not os.path.isdir(PROCESSED_BASE):
+        return None
+    for name in os.listdir(PROCESSED_BASE):
+        if name.startswith(prefix) and os.path.isdir(os.path.join(PROCESSED_BASE, name)):
+            return name
+    return None
 
 AQI_COLORS = {
     "Good": "#00e400",
@@ -542,6 +568,23 @@ def print_summary_stats(data):
 
 # Main
 def main():
+    args = parse_args()
+    dir_name = resolve_processed_dir(args.state, args.county)
+    if not dir_name:
+        print(f"Error: No processed data found for state={args.state}, county={args.county}.", file=sys.stderr)
+        print(f"Looked in: {os.path.abspath(PROCESSED_BASE)}", file=sys.stderr)
+        print("Run clean_and_aggregate.py first, e.g.:", file=sys.stderr)
+        print(f"  uv run data_process/clean_and_aggregate.py --state {args.state} --county {args.county}", file=sys.stderr)
+        sys.exit(1)
+
+    global DATA_DIR, FIG_DIR
+    DATA_DIR = os.path.join(PROCESSED_BASE, dir_name)
+    FIG_DIR = os.path.join(FIGURES_BASE, dir_name)
+    os.makedirs(FIG_DIR, exist_ok=True)
+
+    print(f"Data:  {os.path.abspath(DATA_DIR)}")
+    print(f"Figures: {os.path.abspath(FIG_DIR)}")
+
     data = load()
 
     print("\n Visualizing")
