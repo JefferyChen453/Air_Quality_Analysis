@@ -48,15 +48,22 @@ data/raw/daily_summary/
 ---
 
 ### 2. Clean and aggregate by county
-In raw daily data, each county contains multiple entries from multiple sites, and each site may have multiple observations (i.e., multiple rows for one day). To aggregate them into 1 entry per day, we aggregate across sites and POC by averaging.
+In raw daily data, each county contains multiple entries from multiple sites, and each site may have multiple observations (i.e., multiple rows for one day). To aggregate them into 1 entry per day, we aggregate across sites and POC by averaging and deduplication.
 
-Given state code and county code (e.g. LA County: 6 - 37), the cleaning&aggregation pipeline involves:
+Specify state code and county code (e.g. LA County: 6 - 37), the cleaning&aggregation pipeline involves:
  - cleaning records (event type, sample duration, pollutant standard, POC dedup)
  - aggregating to **county-level daily** series.
 
 Commands for data cleaning and aggregation for LA County:
 ```bash
 uv run data_process/clean_and_aggregate.py --state 6 --county 37
+```
+
+If no state or county is specified, the script automatically detects all available counties from the raw dataset and processes them sequentially.
+
+Commands for data cleaning and aggregation if both state and county are omitted:
+```bash
+uv run data_process/clean_and_aggregate.py
 ```
 
 **Processed layout for a single county (aligned with original raw data)**
@@ -69,10 +76,6 @@ data/processed/06_037_Los_Angeles/
 ├── toxics_precursors_lead/
 └── daily_aqi/            # aqi_daily.csv
 ```
-
-For other counties, simply change the state and county code.
-
----
 
 ### 3. Visualize
 
