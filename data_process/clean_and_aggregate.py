@@ -1,12 +1,13 @@
 """
-Clean and aggregate EPA Daily Summary data for a specific state code and county code.
+Clean and aggregate EPA Daily Summary data for the following modes.
 
-Processes categories:
-  - Criteria Gases (O3, SO2, CO, NO2)
-  - Particulates (PM2.5 FRM, PM2.5 non-FRM, PM10, PMc)
-  - Meteorological (Wind, Temperature, Pressure, RH/Dewpoint)
-  - Toxics, Precursors, and Lead (HAPS, VOCS, Lead, NONOxNOy)
-  - Daily AQI by County (just filter, already county-level)
+Modes:
+1. Single county:
+       if a state code and county code is specified ex: --state 6 --county 73
+2. All counties automatically:
+       if both are omitted
+3. Specific categories only:
+       if a specific category is assigned ex: --category gases pm
 
 Output data tree structure:
   ./data/processed/{state_code}_{county_code}_{county_name}/
@@ -15,13 +16,9 @@ Output data tree structure:
       ├── meteorological/
       ├── toxics_precursors_lead/
       └── daily_aqi/
-
-Usage:
-    uv run data_process/clean_aggregate_county.py --state 6 --county 37
 """
 
 import os
-import sys
 import argparse
 import pandas as pd
 import numpy as np
@@ -128,12 +125,14 @@ CATEGORY_ALIASES = {
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Clean and aggregate EPA data by county.")
-    parser.add_argument("--state", type=int, required=True, help="state code")
-    parser.add_argument("--county", type=int, required=True, help="county code")
-    parser.add_argument("--year", type=int, default=2025, help="Data year 2025")
+    parser = argparse.ArgumentParser(
+        description="Clean and aggregate EPA data by county. If --state/--county are omitted, process all counties automatically."
+    )
+    parser.add_argument("--state", type=int, required=False, help="state code")
+    parser.add_argument("--county", type=int, required=False, help="county code")
+    parser.add_argument("--year", type=int, default=2025, help="Data year")
     parser.add_argument("--category", nargs="*", default=None,
-                        help="Categories to process (default to process all categories)")
+                        help="Categories to process (default: all categories)")
     return parser.parse_args()
 
 
@@ -150,7 +149,6 @@ def resolve_categories(cat_args):
     return list(dict.fromkeys(resolved))
 
 
-# Data loading
 def load_raw_csv(raw_subdir, param_code, year):
     filename = f"daily_{param_code}_{year}.csv"
     filepath = os.path.join(RAW_BASE, raw_subdir, filename)
@@ -172,21 +170,13 @@ def filter_county(df, state_code, county_code):
 
 def get_county_name(df):
     if "County Name" in df.columns and len(df) > 0:
-        return df["County Name"].iloc[0].strip().replace(" ", "_")
+        return str(df["County Name"].iloc[0]).strip().replace(" ", "_")
     return None
 
 
-# Cleaning
 def clean_records(df, param_config):
-    """
-    Clean steps:
-        - Event Type: exclude "Events Excluded" / "Concurred Events Excluded" (duplicates)
-        - Sample Duration: keep appropriate duration (8-hr for O3, 1-hr for other gases, 24-hr for PM)
-        - Pollutant Standard: keep most recent if multiple
-    """
-
     if "Event Type" in df.columns:
-        vals = df["Event Type"].unique()
+        vals = df["Event Type"].dropna().unique()
         print(f"  Event Type values: {list(vals)}")
         exclude = ["Events Excluded", "Concurred Events Excluded"]
         mask = df["Event Type"].isin(exclude)
@@ -197,7 +187,7 @@ def clean_records(df, param_config):
             print(f"  -> Keeping all {len(df):,} rows")
 
     if "Sample Duration" in df.columns:
-        durations = df["Sample Duration"].unique()
+        durations = df["Sample Duration"].dropna().unique()
         print(f"  Sample Duration values: {list(durations)}")
         preferred = param_config.get("preferred_duration")
 
@@ -207,12 +197,11 @@ def clean_records(df, param_config):
                 before = len(df)
                 df = df[mask].copy()
                 print(f"  -> Duration '{preferred}': {len(df):,} (removed {before - len(df)})")
-            else:
+            elif len(df) > 0:
                 mc = df["Sample Duration"].value_counts().index[0]
                 df = df[df["Sample Duration"] == mc].copy()
                 print(f"  -> '{preferred}' not found, using '{mc}': {len(df):,}")
-        elif not param_config.get("is_multi_param", False):
-            # Ozone: prefer 8-hour
+        elif not param_config.get("is_multi_param", False) and len(durations) > 0:
             eight = [d for d in durations if "8" in str(d).upper()]
             if eight:
                 before = len(df)
@@ -245,14 +234,8 @@ def resolve_poc(df):
     return df
 
 
+
 def aggregate_single_param(df, param_config):
-    """
-    Aggregate a single-parameter file to county daily level:
-        - Arithmetic Mean: mean, max, median, std
-        - 1st Max Value: max
-        - Observation Count: sum
-        - AQI: mean, max
-    """
     agg = {"Arithmetic Mean": ["mean", "max", "median", "std"],
            "1st Max Value": ["max"]}
     if "Observation Count" in df.columns:
@@ -286,18 +269,17 @@ def aggregate_single_param(df, param_config):
     return county
 
 
+
 def aggregate_multi_param(df, param_config):
     if "Parameter Name" not in df.columns:
         return aggregate_single_param(df, param_config)
 
-    params = df["Parameter Name"].unique()
-    print(f"  Sub-parameters ({len(params)}): {list(params[:10])}"
-          f"{'...' if len(params) > 10 else ''}")
+    params = df["Parameter Name"].dropna().unique()
+    print(f"  Sub-parameters ({len(params)}): {list(params[:10])}{'...' if len(params) > 10 else ''}")
 
-    # For huge multi-param files, keep top 15 by data volume
     if len(params) > 15:
         top = df["Parameter Name"].value_counts().head(15).index.tolist()
-        print(f"  -> Keeping top 15 by data volume")
+        print("  -> Keeping top 15 by data volume")
         df = df[df["Parameter Name"].isin(top)].copy()
         params = top
 
@@ -307,7 +289,6 @@ def aggregate_multi_param(df, param_config):
         if len(dp) == 0:
             continue
 
-        # POC deduplication per sub-parameter
         dp = dp.sort_values("POC").groupby(["Date Local", "Site Num"]).first().reset_index()
 
         daily = dp.groupby("Date Local").agg(
@@ -316,8 +297,7 @@ def aggregate_multi_param(df, param_config):
             stations=("Site Num", "nunique"),
         ).reset_index()
 
-        # Safe column name
-        safe = (pname.lower().replace(" ", "_").replace("(", "").replace(")", "")
+        safe = (str(pname).lower().replace(" ", "_").replace("(", "").replace(")", "")
                 .replace(",", "").replace("/", "_").replace("-", "_").replace(".", ""))
         if len(safe) > 30:
             safe = safe[:30]
@@ -341,13 +321,10 @@ def aggregate_multi_param(df, param_config):
     return merged
 
 
-# AQI special processing
+
 def process_aqi(year, state_code, county_code):
-    """
-    Daily AQI by County: load and filter (already county-level so no need to agg by sites):
-    """
     print(f"\n{'─'*60}")
-    print(f"Processing: Daily AQI by County")
+    print("Processing: Daily AQI by County")
     print(f"{'─'*60}")
 
     df = load_raw_csv("daily_aqi", "aqi_by_county", year)
@@ -355,8 +332,6 @@ def process_aqi(year, state_code, county_code):
         return None, None
 
     cols = df.columns.tolist()
-    print(f"  Columns: {cols}")
-
     state_col = next((c for c in cols if c.strip().replace(" ", "").lower() == "statecode"), None)
     county_col = next((c for c in cols if c.strip().replace(" ", "").lower() == "countycode"), None)
 
@@ -367,7 +342,6 @@ def process_aqi(year, state_code, county_code):
 
     if state_col is None or county_col is None:
         print(f"  ERROR: Cannot find State/County Code columns in: {cols}")
-        print(f"  Detected state_col={state_col}, county_col={county_col}")
         return None, None
 
     print(f"  Using columns: state='{state_col}', county='{county_col}'")
@@ -380,13 +354,13 @@ def process_aqi(year, state_code, county_code):
     print(f"  County filter -> {len(result):,} rows")
 
     if len(result) == 0:
-        print(f"  No AQI data for this county!")
+        print("  No AQI data for this county!")
         return None, None
 
     name_col = next((c for c in result.columns if "county" in c.lower() and "name" in c.lower()), None)
     county_name = None
     if name_col:
-        county_name = result[name_col].iloc[0].strip().replace(" ", "_")
+        county_name = str(result[name_col].iloc[0]).strip().replace(" ", "_")
 
     date_col = next((c for c in result.columns if "date" in c.lower()), None)
     if date_col:
@@ -397,7 +371,7 @@ def process_aqi(year, state_code, county_code):
     return result, county_name
 
 
-# Per-param pipeline
+
 def process_one_param(raw_subdir, param_code, param_config, state_code, county_code, year):
     print(f"\n{'─'*60}")
     print(f"Processing: {param_config['label']} ({param_code})")
@@ -409,13 +383,13 @@ def process_one_param(raw_subdir, param_code, param_config, state_code, county_c
 
     df_county = filter_county(df, state_code, county_code)
     if len(df_county) == 0:
-        print(f"  No data for this county!")
+        print("  No data for this county!")
         return None, None
 
     county_name = get_county_name(df_county)
     df_clean = clean_records(df_county, param_config)
     if len(df_clean) == 0:
-        print(f"  No data after cleaning!")
+        print("  No data after cleaning!")
         return None, county_name
 
     is_multi = param_config.get("is_multi_param", False)
@@ -423,7 +397,6 @@ def process_one_param(raw_subdir, param_code, param_config, state_code, county_c
         result = aggregate_multi_param(df_clean, param_config)
     else:
         df_site = resolve_poc(df_clean)
-        # Print site info
         if "Local Site Name" in df_site.columns:
             sites = df_site[["Site Num", "Local Site Name"]].drop_duplicates()
         else:
@@ -439,12 +412,11 @@ def process_one_param(raw_subdir, param_code, param_config, state_code, county_c
         return None, county_name
 
     print(f"  Result: {len(result)} daily records")
-    print(f"  Date range: {result['Date Local'].min().date()} "
-          f"to {result['Date Local'].max().date()}")
+    print(f"  Date range: {result['Date Local'].min().date()} to {result['Date Local'].max().date()}")
     return result, county_name
 
 
-# Merge
+
 def merge_results(results, is_any_multi=False):
     merged = None
     for name, df in results.items():
@@ -468,13 +440,56 @@ def merge_results(results, is_any_multi=False):
     return merged
 
 
-def main():
-    args = parse_args()
-    state_code, county_code, year = args.state, args.county, args.year
-    categories = resolve_categories(args.category)
 
+def detect_counties(year, categories):
+    print(f"\n{'='*60}")
+    print("AUTO-DETECTING COUNTIES")
     print(f"{'='*60}")
-    print(f"EPA Data - County Aggregation")
+
+    for cat_key in categories:
+        cat = CATEGORIES[cat_key]
+        for pc, pcfg in cat.get("params", {}).items():
+            if pcfg.get("is_aqi"):
+                df = load_raw_csv("daily_aqi", "aqi_by_county", year)
+                if df is None:
+                    continue
+                cols = df.columns.tolist()
+                state_col = next((c for c in cols if c.strip().replace(" ", "").lower() == "statecode"), None)
+                county_col = next((c for c in cols if c.strip().replace(" ", "").lower() == "countycode"), None)
+                if state_col is None:
+                    state_col = next((c for c in cols if "state" in c.lower() and "code" in c.lower()), None)
+                if county_col is None:
+                    county_col = next((c for c in cols if "county" in c.lower() and "code" in c.lower()), None)
+                if state_col and county_col:
+                    pairs = df[[state_col, county_col]].copy()
+                    pairs.columns = ["State Code", "County Code"]
+                    pairs["State Code"] = pd.to_numeric(pairs["State Code"], errors="coerce")
+                    pairs["County Code"] = pd.to_numeric(pairs["County Code"], errors="coerce")
+                    pairs = pairs.dropna().drop_duplicates().astype(int)
+                    result = sorted([tuple(x) for x in pairs[["State Code", "County Code"]].to_numpy()])
+                    print(f"Detected {len(result)} counties from AQI file")
+                    return result
+            else:
+                df = load_raw_csv(cat["raw_subdir"], pc, year)
+                if df is None:
+                    continue
+                if "State Code" in df.columns and "County Code" in df.columns:
+                    pairs = df[["State Code", "County Code"]].copy()
+                    pairs["State Code"] = pd.to_numeric(pairs["State Code"], errors="coerce")
+                    pairs["County Code"] = pd.to_numeric(pairs["County Code"], errors="coerce")
+                    pairs = pairs.dropna().drop_duplicates().astype(int)
+                    result = sorted([tuple(x) for x in pairs[["State Code", "County Code"]].to_numpy()])
+                    print(f"Detected {len(result)} counties from {cat['raw_subdir']}/daily_{pc}_{year}.csv")
+                    return result
+
+    print("WARNING: Could not auto-detect counties from available files.")
+    return []
+
+
+
+def process_county(state_code, county_code, year, categories):
+    print(f"\n{'='*60}")
+    print("EPA Data - County Aggregation")
     print(f"State: {state_code}, County: {county_code}, Year: {year}")
     print(f"Categories: {', '.join(categories)}")
     print(f"{'='*60}")
@@ -505,7 +520,6 @@ def main():
             summary[cat_key] = "NO DATA"
             continue
 
-        # Save
         dir_name = f"{state_code:02d}_{county_code:03d}_{county_name or 'unknown'}"
         out_dir = os.path.join(".", "data", "processed", dir_name, cat["out_subdir"])
         os.makedirs(out_dir, exist_ok=True)
@@ -530,7 +544,6 @@ def main():
 
         summary[cat_key] = files
 
-    # Final summary
     print(f"\n{'='*60}")
     print("DONE")
     print(f"{'='*60}")
@@ -543,6 +556,34 @@ def main():
                 print(f"    └── {f}")
         else:
             print(f"  {ck}/ -> {st}")
+
+
+
+def main():
+    args = parse_args()
+    year = args.year
+    categories = resolve_categories(args.category)
+
+    if args.state is not None and args.county is not None:
+        process_county(args.state, args.county, year, categories)
+        return
+
+    if args.state is not None or args.county is not None:
+        raise SystemExit("Please provide both --state and --county, or provide neither to process all counties.")
+
+    county_pairs = detect_counties(year, categories)
+    if not county_pairs:
+        raise SystemExit("No counties were detected. Check that your raw CSV files exist under ./data/raw/daily_summary.")
+
+    print(f"\nProcessing {len(county_pairs)} counties automatically...")
+    for i, (state_code, county_code) in enumerate(county_pairs, start=1):
+        print(f"\n{'#'*60}")
+        print(f"AUTO COUNTY {i}/{len(county_pairs)} -> state={state_code}, county={county_code}")
+        print(f"{'#'*60}")
+        try:
+            process_county(state_code, county_code, year, categories)
+        except Exception as e:
+            print(f"ERROR while processing state={state_code}, county={county_code}: {e}")
 
 
 if __name__ == "__main__":
