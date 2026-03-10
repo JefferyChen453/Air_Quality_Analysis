@@ -69,7 +69,7 @@ CATEGORY_ALIASES = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Download EPA AirData files.")
-    parser.add_argument("--year", type=int, default=2025, help="Data year (default: 2025)")
+    parser.add_argument("--year", type=int, nargs="+", default=[2025], help="Data year(s) (e.g., 2025, or 2015 2025 for a range)")
     parser.add_argument("--category", nargs="*", default=None,
                         help="Categories to download. Options: "
                              "criteria_gases (or gases), particulates (or pm), "
@@ -169,39 +169,50 @@ def download_category(cat_key, cat_config, year, base_raw_dir):
 
 def main():
     args = parse_args()
-    year = args.year
+    years = args.year
     categories = resolve_categories(args.category)
-
+    if len(years) == 2:
+        years = list(range(years[0], years[1] + 1))
+    
     base_raw_dir = os.path.join(".", "data", "raw", "daily_summary")
 
     print(f"{'='*60}")
     print(f"EPA AirData Downloader")
-    print(f"Year: {year}")
+    print(f"Years: {years}")
     print(f"Categories: {', '.join(categories)}")
     print(f"Output: {os.path.abspath(base_raw_dir)}")
     print(f"{'='*60}")
 
     all_results = {}
 
-    for cat_key in categories:
-        cat_config = CATEGORIES[cat_key]
-        print(f"\n{'━'*60}")
-        print(f"Category: {cat_key.upper()}")
-        print(f"{'━'*60}")
+    for year in years:
+        print(f"\n{'*'*60}")
+        print(f"Processing Year: {year}")
+        print(f"{'*'*60}")
+        
+        for cat_key in categories:
+            cat_config = CATEGORIES[cat_key]
+            print(f"\n{'━'*60}")
+            print(f"Category: {cat_key.upper()}")
+            print(f"{'━'*60}")
 
-        results = download_category(cat_key, cat_config, year, base_raw_dir)
-        all_results[cat_key] = results
+            results = download_category(cat_key, cat_config, year, base_raw_dir)
+            if cat_key not in all_results:
+                all_results[cat_key] = {}
+            all_results[cat_key][year] = results
 
     print(f"\n{'='*60}")
     print("DOWNLOAD SUMMARY")
     print(f"{'='*60}")
-    for cat_key, results in all_results.items():
+    for cat_key, year_results in all_results.items():
         print(f"\n  {cat_key}:")
-        for file_key, status in results.items():
-            if isinstance(status, list):
-                print(f"    {file_key:20s}: OK -> {', '.join(status)}")
-            else:
-                print(f"    {file_key:20s}: {status}")
+        for year, results in year_results.items():
+            print(f"    Year: {year}")
+            for file_key, status in results.items():
+                if isinstance(status, list):
+                    print(f"      {file_key:20s}: OK -> {', '.join(status)}")
+                else:
+                    print(f"      {file_key:20s}: {status}")
 
     print(f"\nDirectory structure:")
     for cat_key in categories:
