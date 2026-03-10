@@ -100,3 +100,19 @@ uv run data_process/visualize.py --state 6 --county 37 # for LA County
 MA refers to Moving Average
 
 ---
+
+### 4. Train CatBoost models
+
+The `models/train_catboost.py` script merges pollutant, particulate, meteorological, and AQI tables, engineers lag/rolling features, and trains a CatBoost model with time-based splits (train = years before validation year, validation = `--val-year`, test = `--test-year`).
+
+```bash
+# Numeric AQI regression (defaults to state=6, county=37, val-year=2023, test-year=2024)
+uv run python models/train_catboost.py --model-type regression
+
+# AQI category classification
+uv run python models/train_catboost.py --model-type classification
+```
+
+Artifacts (model binaries + metrics JSON) are written to `models/{state}_{county}_{name}/`. Use `--output-dir` to override the destination, and `--val-year` / `--test-year` to change the temporal splits.
+
+---

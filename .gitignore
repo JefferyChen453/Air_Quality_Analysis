@@ -8,6 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
-
+.uv\-cache
 figures/
 data/
