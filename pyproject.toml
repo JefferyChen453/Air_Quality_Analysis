@@ -11,4 +11,8 @@ dependencies = [
     "seaborn>=0.13.0",
     "scipy>=1.15.0",
     "contextily>=1.7.0",
+    "catboost>=1.2.5",
+    "scikit-learn>=1.5.0",
+    "torch>=2.10.0",
+    "joblib>=1.5.3",
 ]

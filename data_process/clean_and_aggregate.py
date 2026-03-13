@@ -154,11 +154,25 @@ def load_raw_csv(raw_subdir, param_code, year):
     filepath = os.path.join(RAW_BASE, raw_subdir, filename)
     if not os.path.exists(filepath):
         print(f"  WARNING: Not found: {filepath}")
+# Data loading
+def load_raw_csv_years(raw_subdir, param_code, years):
+    dfs = []
+    for year in years:
+        filename = f"daily_{param_code}_{year}.csv"
+        filepath = os.path.join(RAW_BASE, raw_subdir, filename)
+        if not os.path.exists(filepath):
+            print(f"  WARNING: Not found: {filepath}")
+            continue
+        print(f"  Loading: {filename}")
+        df = pd.read_csv(filepath, low_memory=False)
+        dfs.append(df)
+    
+    if not dfs:
         return None
-    print(f"  Loading: {filename}")
-    df = pd.read_csv(filepath, low_memory=False)
-    print(f"  Total rows: {len(df):,}")
-    return df
+    
+    combined_df = pd.concat(dfs, ignore_index=True)
+    print(f"  Total rows combined: {len(combined_df):,}")
+    return combined_df
 
 
 def filter_county(df, state_code, county_code):
@@ -259,7 +273,7 @@ def aggregate_single_param(df, param_config):
         rn["AQI_max"] = "aqi_max"
 
     county = county.rename(columns=rn).reset_index()
-    county["Date Local"] = pd.to_datetime(county["Date Local"])
+    county["Date Local"] = pd.to_datetime(county["Date Local"], format="mixed")
     county = county.sort_values("Date Local").reset_index(drop=True)
     county["parameter"] = param_config["out_name"]
     county["unit"] = param_config["unit"]
@@ -314,20 +328,23 @@ def aggregate_multi_param(df, param_config):
     for p in pieces[1:]:
         merged = pd.merge(merged, p, on="Date Local", how="outer")
 
-    merged["Date Local"] = pd.to_datetime(merged["Date Local"])
+    merged["Date Local"] = pd.to_datetime(merged["Date Local"], format="mixed")
     merged = merged.sort_values("Date Local").reset_index(drop=True)
     num_cols = merged.select_dtypes(include=[np.number]).columns
     merged[num_cols] = merged[num_cols].round(4)
     return merged
 
 
-
-def process_aqi(year, state_code, county_code):
+# AQI special processing
+def process_aqi(years, state_code, county_code):
+    """
+    Daily AQI by County: load and filter (already county-level so no need to agg by sites):
+    """
     print(f"\n{'─'*60}")
-    print("Processing: Daily AQI by County")
+    print(f"Processing: Daily AQI by County for years {years}")
     print(f"{'─'*60}")
 
-    df = load_raw_csv("daily_aqi", "aqi_by_county", year)
+    df = load_raw_csv_years("daily_aqi", "aqi_by_county", years)
     if df is None:
         return None, None
 
@@ -364,20 +381,20 @@ def process_aqi(year, state_code, county_code):
 
     date_col = next((c for c in result.columns if "date" in c.lower()), None)
     if date_col:
-        result[date_col] = pd.to_datetime(result[date_col])
+        result[date_col] = pd.to_datetime(result[date_col], format="mixed")
         result = result.sort_values(date_col).reset_index(drop=True)
         print(f"  Date range: {result[date_col].min().date()} to {result[date_col].max().date()}")
 
     return result, county_name
 
 
-
-def process_one_param(raw_subdir, param_code, param_config, state_code, county_code, year):
+# Per-param pipeline
+def process_one_param(raw_subdir, param_code, param_config, state_code, county_code, years):
     print(f"\n{'─'*60}")
-    print(f"Processing: {param_config['label']} ({param_code})")
+    print(f"Processing: {param_config['label']} ({param_code}) for years {years}")
     print(f"{'─'*60}")
 
-    df = load_raw_csv(raw_subdir, param_code, year)
+    df = load_raw_csv_years(raw_subdir, param_code, years)
     if df is None or len(df) == 0:
         return None, None
 
@@ -440,6 +457,15 @@ def merge_results(results, is_any_multi=False):
     return merged
 
 
+def main():
+    args = parse_args()
+    
+    years = args.year
+    if len(years) == 2:
+        years = list(range(years[0], years[1] + 1))
+        
+    state_code, county_code = args.state, args.county
+    categories = resolve_categories(args.category)
 
 def detect_counties(year, categories):
     print(f"\n{'='*60}")
@@ -506,10 +532,10 @@ def process_county(state_code, county_code, year, categories):
         cat_results = {}
         for pc, pcfg in cat.get("params", {}).items():
             if pcfg.get("is_aqi"):
-                r, cn = process_aqi(year, state_code, county_code)
+                r, cn = process_aqi(years, state_code, county_code)
             else:
                 r, cn = process_one_param(cat["raw_subdir"], pc, pcfg,
-                                          state_code, county_code, year)
+                                          state_code, county_code, years)
             if r is not None:
                 cat_results[pcfg["out_name"]] = r
             if cn and not county_name:
