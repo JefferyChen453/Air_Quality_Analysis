@@ -528,7 +528,6 @@ def process_county(state_code, county_code, year, categories):
         print(f"\n{'━'*60}")
         print(f"CATEGORY: {cat_key.upper()}")
         print(f"{'━'*60}")
-
         cat_results = {}
         for pc, pcfg in cat.get("params", {}).items():
             if pcfg.get("is_aqi"):

@@ -148,10 +148,33 @@ def build_feature_frame(
         raise FileNotFoundError(
             f"Processed directory for {state_code:02d}-{county_code:03d} not found under {PROCESSED_BASE}."
         )
-
     base = PROCESSED_BASE / processed_dir
+    def load_and_merge_subdir(subdir_name: str) -> pd.DataFrame:
+        cat_dir = base / subdir_name
+        if not cat_dir.exists():
+            raise FileNotFoundError(f"Directory {cat_dir} does not exist.")
+        
+        merged_path = cat_dir / f"all_{subdir_name}_daily.csv"
+        if merged_path.exists():
+            return _load_processed_csv(merged_path)
+        
+        csv_files = [f for f in cat_dir.glob("*.csv") if not f.name.startswith("all_")]
+        if not csv_files:
+            raise FileNotFoundError(f"No CSV files found in {cat_dir}")
+            
+        dfs = []
+        for f in csv_files:
+            param_prefix = f.name.replace("_daily.csv", "")
+            tmp_df = _load_processed_csv(f)
 
-    # 1. Load AQI target (never interpolate targets)
+            cols_to_rename = {c: f"{param_prefix}_{c}" for c in tmp_df.columns if c != "date"}
+            tmp_df = tmp_df.rename(columns=cols_to_rename)
+            dfs.append(tmp_df)
+
+        merged_df = dfs[0]
+        for next_df in dfs[1:]:
+            merged_df = pd.merge(merged_df, next_df, on="date", how="outer")
+        return merged_df
     aqi_path = base / "daily_aqi" / "aqi_daily.csv"
     aqi = _load_processed_csv(aqi_path)
     aqi = _drop_non_feature_columns(
@@ -165,41 +188,23 @@ def build_feature_frame(
             "defining_site",
         ],
     )
-    # Keep target columns only.
     aqi = aqi[[c for c in aqi.columns if c in {"date", "aqi", "category", "number_of_sites_reporting"}]]
     aqi = aqi.rename(columns={"category": "aqi_category"})
-
-    # 2. Load Pollutants (interpolated for features)
-    gases = _load_processed_csv(base / "criteria_gases" / "all_criteria_gases_daily.csv")
-    parts = _load_processed_csv(base / "particulates" / "all_particulates_daily.csv")
-    
+    gases = load_and_merge_subdir("criteria_gases")
+    parts = load_and_merge_subdir("particulates")
     pollutants_raw = gases.merge(parts, on="date", how="outer")
-    pollutants_raw = pollutants_raw.drop(columns=[c for c in ["state_code", "county_code"] if c in pollutants_raw.columns])
-    
+    pollutants_raw = pollutants_raw.drop(columns=[c for c in ["state_code", "county_code"] if c in pollutants_raw.columns], errors="ignore")
     pollutants_feat = _interpolate_pollutants(pollutants_raw.copy())
-
-    # Generate lag features from interpolated columns
     pollutants_lag = _shift_pollutant_features(pollutants_feat, window_size=pollutant_window, keep_raw=False)
-
-    # 3. Load Meteorology (kept at Day T)
-    meteo = _load_processed_csv(base / "meteorological" / "all_meteorological_daily.csv")
-    meteo = meteo.drop(columns=[c for c in ["state_code", "county_code"] if c in meteo.columns])
-
-    # 4. Merge everything
+    meteo = load_and_merge_subdir("meteorological")
+    meteo = meteo.drop(columns=[c for c in ["state_code", "county_code"] if c in meteo.columns], errors="ignore")
     df = aqi
     df = df.merge(pollutants_lag, on="date", how="left")
-    
-    # If we need raw targets (e.g. for LSTM prediction targets), merge the sparse version
     if include_targets:
         df = df.merge(pollutants_raw, on="date", how="left")
-        
     df = df.merge(meteo, on="date", how="left")
-
-    # 5. Engineering
     df = _apply_temporal_features(df)
     df = _apply_lag_features(df)
-
-    # Drop rows where essential features (target lags) are missing.
     essential_lag_cols = [c for c in df.columns if c.startswith("aqi_lag") or c.startswith("aqi_ma")]
     df = df.dropna(subset=essential_lag_cols)
 

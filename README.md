@@ -119,3 +119,10 @@ uv run python models/train_catboost.py --model-type classification
 Artifacts (model binaries + metrics JSON) are written to `models/{state}_{county}_{name}/`. Use `--output-dir` to override the destination, and `--val-year` / `--test-year` to change the temporal splits.
 
 ---
+## Random Forest Train and Test
+Training on years 2015 to 2024 (3623 samples)
+Testing on 2025 (274 samples)
+
+Random Forest Results (Year 2025):
+R2 Score: 0.9533
+MAE: 4.0111
